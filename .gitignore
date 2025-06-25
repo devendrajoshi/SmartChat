@@ -1,0 +1,60 @@
+# Python
+.Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env                 # Important: Keep your environment variables secure!
+.pytest_cache/
+.tox/
+.venv/                # Virtual environment directory
+env/                  # Another common name for virtual environment
+venv/                 # Another common name for virtual environment
+pip-log.txt
+pip-delete-this-directory.txt
+.python-version       # pyenv
+
+# Editor-specific
+.vscode/              # VS Code configuration directory
+.vscode/*.log
+.vscode/*.txt
+.vscode/*.code-snippets # If you have personal snippets
+!.vscode/settings.json # Keep this if you want to share workspace settings
+!.vscode/launch.json   # Keep this if you want to share launch configurations
+!.vscode/tasks.json    # Keep this if you want to share tasks
+
+# Operating System Files
+.DS_Store             # macOS
+.Trashes              # macOS
+Thumbs.db             # Windows
+ehthumbs.db           # Windows
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+.nox/
+
+# Logs
+*.log
+
+# Databases
+*.sqlite3
+*.db
+
+# Thumbnails
+.thumbnails/
+
+# Jupyter Notebook files
+.ipynb_checkpoints
+
+# Miscellaneous
+.history

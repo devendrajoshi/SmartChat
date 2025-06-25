@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI",
+            "request": "launch",
+            "type": "python",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}", // This sets the current working directory to your project root
+            
+            "jinja": true,
+            "justMyCode": true,
+            "pythonArgs": ["-Xfrozen_modules=off"]
+        },
+        {
+            "name": "Python: Pytest",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["test.py", "-s"], // You can add arguments here, e.g., ["-v", "-s"] for verbose and print output
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python", // Ensure this points to your project's venv
+            "console": "integratedTerminal", // This will show test output directly in VS Code's terminal
+            "justMyCode": true
+        }
+    ]
+}

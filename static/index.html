@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Chat App</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: "Inter", sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        /* Custom scrollbar for chat messages */
+        .chat-messages::-webkit-scrollbar {
+            width: 8px;
+        }
+        .chat-messages::-webkit-scrollbar-track {
+            background: #e2e8f0;
+            border-radius: 10px;
+        }
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
+        }
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="p-4">
+
+    <div class="container mx-auto max-w-md bg-white rounded-lg shadow-xl overflow-hidden">
+        <div class="p-4 bg-blue-600 text-white text-center text-2xl font-bold rounded-t-lg">
+            Simple Chat
+        </div>
+
+        <div id="username-setup" class="p-4 border-b border-gray-200">
+            <label for="username-input" class="block text-gray-700 text-sm font-bold mb-2">Your Username:</label>
+            <input type="text" id="username-input" class="shadow appearance-none border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline focus:border-blue-500" placeholder="Enter your username">
+            <button id="set-username-btn" class="mt-3 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline w-full transition duration-150 ease-in-out">
+                Set Username
+            </button>
+        </div>
+
+        <div id="chat-interface" class="hidden">
+            <div id="chat-messages" class="chat-messages h-80 overflow-y-auto p-4 bg-gray-50">
+                <!-- Chat messages will be appended here -->
+            </div>
+
+            <div class="p-4 border-t border-gray-200 flex items-center">
+                <input type="text" id="message-input" class="shadow appearance-none border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline focus:border-blue-500 mr-2" placeholder="Type your message...">
+                <button id="send-button" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-150 ease-in-out">
+                    Send
+                </button>
+            </div>
+
+            <div class="p-4 bg-gray-100 flex justify-center border-t border-gray-200 rounded-b-lg">
+                <button id="clear-chat-button" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-150 ease-in-out">
+                    Clear Chat History
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get DOM elements
+        const chatMessagesDiv = document.getElementById('chat-messages');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const clearChatButton = document.getElementById('clear-chat-button');
+        const usernameInput = document.getElementById('username-input');
+        const setUsernameBtn = document.getElementById('set-username-btn');
+        const usernameSetupDiv = document.getElementById('username-setup');
+        const chatInterfaceDiv = document.getElementById('chat-interface');
+
+        let currentUsername = '';
+        let websocket = null; // WebSocket instance
+
+        // Simple modal replacement for alert/confirm
+        function showAlert(message) {
+            const modal = document.createElement('div');
+            modal.classList.add('fixed', 'inset-0', 'bg-black', 'bg-opacity-50', 'flex', 'items-center', 'justify-center', 'z-50');
+            modal.innerHTML = `
+                <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm mx-auto text-center">
+                    <p class="text-gray-800 mb-4">${message}</p>
+                    <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-150 ease-in-out" id="modal-ok">OK</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            document.getElementById('modal-ok').onclick = () => {
+                document.body.removeChild(modal);
+            };
+        }
+
+        async function showConfirm(message) {
+            return new Promise((resolve) => {
+                const modal = document.createElement('div');
+                modal.classList.add('fixed', 'inset-0', 'bg-black', 'bg-opacity-50', 'flex', 'items-center', 'justify-center', 'z-50');
+                modal.innerHTML = `
+                    <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm mx-auto text-center">
+                        <p class="text-gray-800 mb-4">${message}</p>
+                        <div class="flex justify-around mt-4">
+                            <button class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-150 ease-in-out mr-2" id="modal-cancel">Cancel</button>
+                            <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-150 ease-in-out" id="modal-ok">OK</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+
+                document.getElementById('modal-ok').onclick = () => {
+                    document.body.removeChild(modal);
+                    resolve(true);
+                };
+                document.getElementById('modal-cancel').onclick = () => {
+                    document.body.removeChild(modal);
+                    resolve(false);
+                };
+            });
+        }
+
+
+        /**
+         * Connects to the WebSocket server.
+         */
+        function connectWebSocket() {
+            // Determine WebSocket URL based on current host
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+            websocket = new WebSocket(wsUrl);
+
+            websocket.onopen = (event) => {
+                console.log("WebSocket connected:", event);
+                // Optionally send a "user joined" message to the server
+            };
+
+            websocket.onmessage = (event) => {
+                console.log("Message received:", event.data);
+                try {
+                    const message = JSON.parse(event.data);
+                    displayMessage(message.username, message.text, message.timestamp);
+                } catch (e) {
+                    console.error("Failed to parse message:", e, event.data);
+                }
+            };
+
+            websocket.onclose = (event) => {
+                console.log("WebSocket disconnected:", event);
+                // Attempt to reconnect after a delay if disconnected unexpectedly
+                setTimeout(connectWebSocket, 1000);
+            };
+
+            websocket.onerror = (error) => {
+                console.error("WebSocket error:", error);
+                showAlert("WebSocket connection error. Please try refreshing the page.");
+            };
+        }
+
+        /**
+         * Displays a single message in the chat interface.
+         * @param {string} username - The sender's username.
+         * @param {string} text - The message text.
+         * @param {string} timestamp - The message timestamp.
+         */
+        function displayMessage(username, text, timestamp) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('mb-3', 'p-3', 'rounded-lg', 'shadow-sm', 'relative');
+
+            const isCurrentUser = username === currentUsername;
+
+            if (isCurrentUser) {
+                messageElement.classList.add('bg-blue-100', 'ml-auto', 'text-right', 'rounded-br-none');
+            } else {
+                messageElement.classList.add('bg-gray-200', 'mr-auto', 'rounded-bl-none');
+            }
+
+            const time = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            messageElement.innerHTML = `
+                <div class="font-semibold ${isCurrentUser ? 'text-blue-700' : 'text-gray-800'}">
+                    ${username}
+                </div>
+                <div class="text-gray-800 break-words">${text}</div>
+                <div class="text-xs text-gray-500 mt-1">${time}</div>
+            `;
+            chatMessagesDiv.appendChild(messageElement);
+            chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight; // Keep scrolled to bottom
+        }
+
+        /**
+         * Sends a message via WebSocket.
+         */
+        function sendMessage() {
+            const messageText = messageInput.value.trim();
+            if (messageText === '') {
+                showAlert("Please enter a message.");
+                return;
+            }
+            if (currentUsername === '') {
+                showAlert("Please set your username first.");
+                return;
+            }
+            if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                showAlert("WebSocket not connected. Please try again or refresh.");
+                return;
+            }
+
+            const newMessage = {
+                username: currentUsername,
+                text: messageText,
+                timestamp: new Date().toISOString()
+            };
+
+            // Send message as JSON string
+            websocket.send(JSON.stringify(newMessage));
+            messageInput.value = ''; // Clear input field
+        }
+
+        /**
+         * Clears chat history (on client side).
+         * Note: This only clears the *displayed* messages.
+         * For a full clear, the backend would need to support it.
+         */
+        async function clearChatHistory() {
+            const confirmed = await showConfirm("Are you sure you want to clear your local chat display? This will not clear messages for other users, nor will it clear messages stored on the server.");
+            if (confirmed) {
+                chatMessagesDiv.innerHTML = ''; // Clear display
+                // If the backend had a clear history endpoint, you'd call it here.
+            }
+        }
+
+        /**
+         * Sets the username and transitions to the chat interface.
+         */
+        function setUsername() {
+            const username = usernameInput.value.trim();
+            if (username === '') {
+                showAlert("Please enter a username.");
+                return;
+            }
+            currentUsername = username;
+            localStorage.setItem('currentChatUsername', username); // Persist username locally
+            usernameSetupDiv.classList.add('hidden');
+            chatInterfaceDiv.classList.remove('hidden');
+            connectWebSocket(); // Establish WebSocket connection
+            messageInput.focus(); // Focus on message input
+        }
+
+        // Event Listeners
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        clearChatButton.addEventListener('click', clearChatHistory);
+        setUsernameBtn.addEventListener('click', setUsername);
+        usernameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                setUsername();
+            }
+        });
+
+        // Initial setup: Check for existing username on page load
+        window.onload = () => {
+            const storedUsername = localStorage.getItem('currentChatUsername');
+            if (storedUsername) {
+                currentUsername = storedUsername;
+                usernameSetupDiv.classList.add('hidden');
+                chatInterfaceDiv.classList.remove('hidden');
+                connectWebSocket();
+                messageInput.focus();
+            } else {
+                usernameInput.focus();
+            }
+        };
+    </script>
+</body>
+</html>
