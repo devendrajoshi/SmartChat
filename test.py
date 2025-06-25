@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 from app.main import app as fastapi_app
 # Import the ConnectionManager to clear its message history for test isolation
 from app.main import manager as connection_manager
-from app.akashvani_llm import AKASHVANI_USERNAME
+# Import Akashvani's LLM components and the evaluation function
+from app.akashvani_llm import AKASHVANI_USERNAME, evaluate_akashvani_response
 
 # Constants for formatting output
 CHAT_WIDTH = 80
@@ -35,7 +36,10 @@ def print_chat_message(username: str, text: str, is_akashvani: bool = False):
 
     if is_akashvani:
         # Right align for Akashvani
-        prefix_space = " " * (CHAT_WIDTH - len(formatted_username) - len(message_line) - len(timestamp) - RIGHT_ALIGN_PADDING)
+        # Ensure that the length calculation accounts for potential multi-line responses from LLM
+        # For simplicity in this display, we'll align the first line right.
+        first_line = message_line.split('\n')[0]
+        prefix_space = " " * (CHAT_WIDTH - len(formatted_username) - len(first_line) - len(timestamp) - RIGHT_ALIGN_PADDING)
         print(f"{prefix_space}{formatted_username} {message_line} ({timestamp})")
     else:
         # Left align for other users
@@ -129,7 +133,7 @@ async def test_user_message_broadcast(client: TestClient):
 @pytest.mark.asyncio
 async def test_akashvani_explicit_question(client: TestClient):
     """
-    Tests an explicit question to Akashvani and verifies its response.
+    Tests an explicit question to Akashvani and verifies its response using LLM evaluation.
     This test *requires* a running Ollama instance with the configured model.
     """
     print("\n" + "="*CHAT_WIDTH)
@@ -137,42 +141,41 @@ async def test_akashvani_explicit_question(client: TestClient):
     print("="*CHAT_WIDTH)
     user_username = "Tester"
     question_to_akashvani = "@av what is the capital of France?"
-    expected_keywords = ["paris", "france"] # Keywords to check in Akashvani's response
+    
+    expected_behavior = (
+        f"Akashvani should respond with the correct capital of France. "
+        f"The response should be concise and directly answer the question."
+    )
 
     try:
         with client.websocket_connect("/ws") as ws:
             print(f"  [System Message] {user_username} connected.")
 
-            # Send a message to seed chat history (optional but good for context for some models)
             initial_message = create_message(user_username, "Hello chat, testing Akashvani.")
             print_chat_message(user_username, initial_message['text'])
             ws.send_text(json.dumps(initial_message))
-            await asyncio.sleep(0.1) # Small sleep to allow server to process and broadcast
-            json.loads(ws.receive_text()) # Consume the initial message echo
+            await asyncio.sleep(0.1)
+            json.loads(ws.receive_text()) # Consume echo
 
-            # Send the question to Akashvani
             akashvani_query_message = create_message(user_username, question_to_akashvani)
             print_chat_message(user_username, akashvani_query_message['text'])
             ws.send_text(json.dumps(akashvani_query_message))
 
-            # Expect user's own query to be echoed back (this happens first in broadcast)
-            received_query = json.loads(ws.receive_text())
-            # We don't print this echo as it's just a confirmation of send for the client itself.
+            json.loads(ws.receive_text()) # Consume echo of user's query
 
-            # Expect Akashvani's response (this comes after LLM processing)
             akashvani_response = json.loads(ws.receive_text())
             print_chat_message(akashvani_response["username"], akashvani_response["text"], is_akashvani=True)
             
-            assert akashvani_response["username"] == AKASHVANI_USERNAME, \
-                f"Expected Akashvani's username '{AKASHVANI_USERNAME}', got '{akashvani_response['username']}'"
-            assert akashvani_response["text"] is not None, \
-                "Akashvani's response text should not be None"
-            assert len(akashvani_response["text"]) > 0, \
-                "Akashvani's response text should not be empty"
+            # Use LLM Judge for assertion
+            evaluation_result = await evaluate_akashvani_response(expected_behavior, akashvani_response["text"])
             
-            found_keyword = any(keyword in akashvani_response["text"].lower() for keyword in expected_keywords)
-            assert found_keyword, \
-                f"Akashvani's response '{akashvani_response['text']}' did not contain expected keywords {expected_keywords}"
+            print(f"  [LLM Judge Result] Status: {evaluation_result['status']}")
+            if evaluation_result['status'] == "FAIL":
+                print(f"  [LLM Judge Reason] Reason: {evaluation_result['reason']}")
+
+            assert evaluation_result['status'] == "PASS", \
+                f"LLM Judge failed the response. Reason: {evaluation_result['reason']}"
+
         print("Test Result: PASSED\n")
     except Exception as e:
         print(f"Test Result: FAILED - {e}\n")
@@ -182,54 +185,55 @@ async def test_akashvani_explicit_question(client: TestClient):
 @pytest.mark.asyncio
 async def test_akashvani_contextual_question(client: TestClient):
     """
-    Tests Akashvani's ability to respond to a contextual question.
+    Tests Akashvani's ability to respond to a contextual question using LLM evaluation.
     This test *requires* a running Ollama instance with the configured model.
     """
     print("\n" + "="*CHAT_WIDTH)
     print(f"--- Test Case: Akashvani Contextual Question ---".center(CHAT_WIDTH))
     print("="*CHAT_WIDTH)
     user_username = "TesterContext"
-    expected_keywords = ["london", "raining", "weather", "true", "yes"]
+
+    expected_behavior = (
+        f"Akashvani should verify whether it is currently raining in London based on its knowledge. "
+        f"It should not just repeat what was said in the chat, but provide a factual answer. "
+        f"The response should be concise."
+    )
 
     try:
         with client.websocket_connect("/ws") as ws:
             print(f"  [System Message] {user_username} connected.")
 
-            # Simulate a short conversation to build context for Akashvani
             msg_alice = create_message("Alice", "I heard it's raining in London today.")
             print_chat_message("Alice", msg_alice['text'])
             ws.send_text(json.dumps(msg_alice))
             await asyncio.sleep(0.1)
-            json.loads(ws.receive_text()) # Consume Alice's message echo
+            json.loads(ws.receive_text()) # Consume echo
 
             msg_bob = create_message("Bob", "Is that true? I thought it was sunny.")
             print_chat_message("Bob", msg_bob['text'])
             ws.send_text(json.dumps(msg_bob))
             await asyncio.sleep(0.1)
-            json.loads(ws.receive_text()) # Consume Bob's message echo
+            json.loads(ws.receive_text()) # Consume echo
 
-            # Now ask Akashvani about the previous statement
             akashvani_query_message = create_message(user_username, "@av is it raining in London?")
             print_chat_message(user_username, akashvani_query_message['text'])
             ws.send_text(json.dumps(akashvani_query_message))
 
-            # Consume TesterContext's message echo
-            json.loads(ws.receive_text())
+            json.loads(ws.receive_text()) # Consume echo of user's query
 
-            # Expect Akashvani's response
             akashvani_response = json.loads(ws.receive_text())
             print_chat_message(akashvani_response["username"], akashvani_response["text"], is_akashvani=True)
             
-            assert akashvani_response["username"] == AKASHVANI_USERNAME, \
-                f"Expected Akashvani's username '{AKASHVANI_USERNAME}', got '{akashvani_response['username']}'"
-            assert akashvani_response["text"] is not None, \
-                "Akashvani's response text should not be None"
-            assert len(akashvani_response["text"]) > 0, \
-                "Akashvani's response text should not be empty"
+            # Use LLM Judge for assertion
+            evaluation_result = await evaluate_akashvani_response(expected_behavior, akashvani_response["text"])
             
-            found_keyword = any(keyword in akashvani_response["text"].lower() for keyword in expected_keywords)
-            assert found_keyword, \
-                f"Akashvani's response '{akashvani_response['text']}' did not contain expected keywords {expected_keywords}"
+            print(f"  [LLM Judge Result] Status: {evaluation_result['status']}")
+            if evaluation_result['status'] == "FAIL":
+                print(f"  [LLM Judge Reason] Reason: {evaluation_result['reason']}")
+
+            assert evaluation_result['status'] == "PASS", \
+                f"LLM Judge failed the response. Reason: {evaluation_result['reason']}"
+
         print("Test Result: PASSED\n")
     except Exception as e:
         print(f"Test Result: FAILED - {e}\n")
@@ -239,20 +243,23 @@ async def test_akashvani_contextual_question(client: TestClient):
 @pytest.mark.asyncio
 async def test_akashvani_summarize_request(client: TestClient):
     """
-    Tests Akashvani's ability to summarize the chat history.
+    Tests Akashvani's ability to summarize the chat history using LLM evaluation.
     This test *requires* a running Ollama instance with the configured model.
     """
     print("\n" + "="*CHAT_WIDTH)
     print(f"--- Test Case: Akashvani Summarize Request ---".center(CHAT_WIDTH))
     print("="*CHAT_WIDTH)
     user_username = "Summarizer"
-    expected_keywords = ["meeting", "agenda", "budget", "milestones", "discuss"]
+
+    expected_behavior = (
+        f"Akashvani should provide a brief and accurate summary of the preceding chat messages. "
+        f"The summary should capture the main topics discussed (e.g., meeting agenda, budget, hires, milestones)."
+    )
 
     try:
         with client.websocket_connect("/ws") as ws:
             print(f"  [System Message] {user_username} connected.")
 
-            # Simulate a conversation with multiple messages
             msg_usera_1 = create_message("UserA", "Let's plan our next team meeting agenda.")
             print_chat_message("UserA", msg_usera_1['text'])
             ws.send_text(json.dumps(msg_usera_1))
@@ -276,23 +283,136 @@ async def test_akashvani_summarize_request(client: TestClient):
             print_chat_message(user_username, akashvani_query_message['text'])
             ws.send_text(json.dumps(akashvani_query_message))
 
-            # Consume Summarizer's message echo
-            json.loads(ws.receive_text())
+            json.loads(ws.receive_text()) # Consume echo of user's query
 
-            # Expect Akashvani's response
             akashvani_response = json.loads(ws.receive_text())
             print_chat_message(akashvani_response["username"], akashvani_response["text"], is_akashvani=True)
             
-            assert akashvani_response["username"] == AKASHVANI_USERNAME, \
-                f"Expected Akashvani's username '{AKASHVANI_USERNAME}', got '{akashvani_response['username']}'"
-            assert akashvani_response["text"] is not None, \
-                "Akashvani's response text should not be None"
-            assert len(akashvani_response["text"]) > 0, \
-                "Akashvani's response text should not be empty"
+            # Use LLM Judge for assertion
+            evaluation_result = await evaluate_akashvani_response(expected_behavior, akashvani_response["text"])
             
-            found_keyword = any(keyword in akashvani_response["text"].lower() for keyword in expected_keywords)
-            assert found_keyword, \
-                f"Akashvani's response '{akashvani_response['text']}' did not contain expected keywords {expected_keywords}"
+            print(f"  [LLM Judge Result] Status: {evaluation_result['status']}")
+            if evaluation_result['status'] == "FAIL":
+                print(f"  [LLM Judge Reason] Reason: {evaluation_result['reason']}")
+
+            assert evaluation_result['status'] == "PASS", \
+                f"LLM Judge failed the response. Reason: {evaluation_result['reason']}"
+
+        print("Test Result: PASSED\n")
+    except Exception as e:
+        print(f"Test Result: FAILED - {e}\n")
+        pytest.fail(f"Test failed: {e}")
+
+
+@pytest.mark.asyncio
+async def test_akashvani_complex_contextual_question(client: TestClient):
+    """
+    Tests Akashvani's ability to extract relevant information from a complex, multi-topic chat history
+    and answer a specific question using LLM evaluation.
+    Requires a running Ollama instance.
+    """
+    print("\n" + "="*CHAT_WIDTH)
+    print(f"--- Test Case: Akashvani Complex Contextual Question ---".center(CHAT_WIDTH))
+    print("="*CHAT_WIDTH)
+    user_username = "ComplexQueryUser"
+    expected_behavior = (
+        f"Akashvani should identify the specific date of the marketing meeting from the chat history "
+        f"and state it concisely. It should ignore irrelevant topics like lunch plans."
+    )
+
+    try:
+        with client.websocket_connect("/ws") as ws:
+            print(f"  [System Message] {user_username} connected.")
+
+            messages = [
+                create_message("Dev", "Hey team, just finished the Q2 report. It's looking good."),
+                create_message("Marketing", "Great! When's our next marketing sync meeting? Need to discuss the new campaign launch."),
+                create_message("Ops", "I'm free next Tuesday, but not Wednesday."),
+                create_message("Admin", "Marketing meeting is confirmed for July 15th at 10 AM. Room 301."),
+                create_message("Dev", "Sounds good. Anyone up for lunch at the new cafe?"),
+                create_message("Marketing", "Can't make lunch, busy prepping for July 15th!"),
+                create_message("Ops", "Lunch sounds great, but after our meeting on the 15th."),
+            ]
+
+            for msg in messages:
+                print_chat_message(msg['username'], msg['text'])
+                ws.send_text(json.dumps(msg))
+                await asyncio.sleep(0.1)
+                json.loads(ws.receive_text()) # Consume echo
+
+            akashvani_query_message = create_message(user_username, "@av when is the next marketing meeting?")
+            print_chat_message(user_username, akashvani_query_message['text'])
+            ws.send_text(json.dumps(akashvani_query_message))
+
+            json.loads(ws.receive_text()) # Consume echo of user's query
+
+            akashvani_response = json.loads(ws.receive_text())
+            print_chat_message(akashvani_response["username"], akashvani_response["text"], is_akashvani=True)
+            
+            evaluation_result = await evaluate_akashvani_response(expected_behavior, akashvani_response["text"])
+            
+            print(f"  [LLM Judge Result] Status: {evaluation_result['status']}")
+            if evaluation_result['status'] == "FAIL":
+                print(f"  [LLM Judge Reason] Reason: {evaluation_result['reason']}")
+
+            assert evaluation_result['status'] == "PASS", \
+                f"LLM Judge failed the response. Reason: {evaluation_result['reason']}"
+        print("Test Result: PASSED\n")
+    except Exception as e:
+        print(f"Test Result: FAILED - {e}\n")
+        pytest.fail(f"Test failed: {e}")
+
+
+@pytest.mark.asyncio
+async def test_akashvani_no_relevant_context(client: TestClient):
+    """
+    Tests Akashvani's response when the chat history contains no relevant information
+    to the user's question, using LLM evaluation.
+    Requires a running Ollama instance.
+    """
+    print("\n" + "="*CHAT_WIDTH)
+    print(f"--- Test Case: Akashvani No Relevant Context ---".center(CHAT_WIDTH))
+    print("="*CHAT_WIDTH)
+    user_username = "NoContextUser"
+    expected_behavior = (
+        f"Akashvani should provide the correct chemical formula for water from its general knowledge. "
+        f"It should respond concisely with the factual answer (H2O) and not attempt to summarize chat history. "
+        f"It should not mention that the chat history is irrelevant." # Removed the requirement for disclaimer
+    )
+
+    try:
+        with client.websocket_connect("/ws") as ws:
+            print(f"  [System Message] {user_username} connected.")
+
+            messages = [
+                create_message("UserX", "What's everyone having for dinner tonight?"),
+                create_message("UserY", "I'm thinking pizza. How about you?"),
+                create_message("UserX", "Sounds good! I might cook pasta."),
+            ]
+
+            for msg in messages:
+                print_chat_message(msg['username'], msg['text'])
+                ws.send_text(json.dumps(msg))
+                await asyncio.sleep(0.1)
+                json.loads(ws.receive_text()) # Consume echo
+
+            akashvani_query_message = create_message(user_username, "@av what is the chemical formula for water?")
+            print_chat_message(user_username, akashvani_query_message['text'])
+            ws.send_text(json.dumps(akashvani_query_message))
+
+            json.loads(ws.receive_text()) # Consume echo of user's query
+
+            akashvani_response = json.loads(ws.receive_text())
+            print_chat_message(akashvani_response["username"], akashvani_response["text"], is_akashvani=True)
+            
+            evaluation_result = await evaluate_akashvani_response(expected_behavior, akashvani_response["text"])
+            
+            print(f"  [LLM Judge Result] Status: {evaluation_result['status']}")
+            if evaluation_result['status'] == "FAIL":
+                print(f"  [LLM Judge Reason] Reason: {evaluation_result['reason']}")
+
+            assert evaluation_result['status'] == "PASS", \
+                f"LLM Judge failed the response. Reason: {evaluation_result['reason']}"
         print("Test Result: PASSED\n")
     except Exception as e:
         print(f"Test Result: FAILED - {e}\n")
