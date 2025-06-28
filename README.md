@@ -40,10 +40,9 @@ Before you begin, ensure you have the following installed:
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git)
-    cd YOUR_REPO_NAME # Replace with your actual repo name
-    ```
-    *(**Note**: Replace `YOUR_USERNAME` and `YOUR_REPO_NAME` with your actual GitHub details!)*
+    git clone https://github.com/devendrajoshi/SmartChat.git
+    cd SmartChat # Replace with your actual repo name
+   
 
 2.  **Create a virtual environment (recommended):**
     ```bash
